@@ -26,7 +26,12 @@ if ( ! class_exists( 'P4_Custom_Taxonomy' ) ) {
 			add_action( 'delete_term',                        array( $this, 'trigger_rewrite_rules' ), 10, 3 );
 			add_action( 'save_post',                          array( $this, 'save_taxonomy_page_type' ) , 10, 2 );
 			add_filter( 'available_permalink_structure_tags', array( $this, 'add_taxonomy_as_permalink_structure' ), 10, 1 );
+
+			// Rewrites the permalink to a post belonging to this taxonomy
 			add_filter( 'post_link',                          array( $this, 'filter_permalink' ), 10, 3 );
+
+			// Rewrites the permalink to this taxonomy's page
+			add_filter( 'term_link',                          array( $this, 'filter_term_permalink' ), 10, 3 );
 			add_filter( 'post_rewrite_rules',                 array( $this, 'replace_taxonomy_terms_in_rewrite_rules' ), 10, 1 );
 		}
 
@@ -164,11 +169,60 @@ if ( ! class_exists( 'P4_Custom_Taxonomy' ) ) {
 				'labels'       => $p4_page_type,
 				'show_ui'      => true,
 				'query_var'    => true,
-				'rewrite'      => [ 'slug' => 'page_type' ],
 				'meta_box_cb'  => [ $this, 'create_taxonomy_metabox_markup' ],
 			];
 
 			register_taxonomy( self::TAXONOMY, [ 'p4_page_type', 'post' ], $args );
+
+			// Add a rewrite rule on top of the chain for each slug
+			// of this taxonomy type (e.g.: "publication", "story", etc.)
+			$terms_slugs = $this->get_terms_slugs();
+			foreach ($terms_slugs as $slug) {
+				add_rewrite_rule( $slug . '/?$', 'index.php?' . self::TAXONOMY . '=' . $slug, 'top' );
+			}
+		}
+
+		/**
+		 * Filter for term_link.
+		 *
+		 * @param string $link     The link value.
+		 * @param string $term     The term passed to the filter (unused).
+		 * @param string $taxonomy Taxonomy of the given link.
+		 *
+		 * @return string The filtered permalink for this taxonomy.
+		 */
+		public function filter_term_permalink( $link, $term, $taxonomy )
+		{
+			if ( $taxonomy !== SELF::TAXONOMY )
+				return $link;
+
+			return str_replace( self::TAXONOMY . '/', '', $link );
+		}
+
+		/**
+		 * Get the slugs for all terms in this taxonomy.
+		 *
+		 * @return array Flat array containing the slug for every term.
+		 */
+		private function get_terms_slugs() {
+			// Get planet4 page type taxonomy terms.
+			$terms = $this->get_terms();
+
+            if (! is_wp_error($terms)) {
+                $term_slugs = [];
+                if (! empty($terms)) {
+                    foreach ($terms as $term) {
+                        $term_slugs[] = $term->slug;
+                    }
+                } elseif (empty($terms)) {
+                    // Add story slug also if the taxonomy does not have any terms.
+                    $term_slugs[] = 'story';
+                }
+
+                return $term_slugs;
+			}
+
+			return false;
 		}
 
 		/**
@@ -179,27 +233,15 @@ if ( ! class_exists( 'P4_Custom_Taxonomy' ) ) {
 		 * @return array        The filtered post rewrite rules.
 		 */
 		public function replace_taxonomy_terms_in_rewrite_rules( $rules ) {
-
 			// Get planet4 page type taxonomy terms.
-			$terms = $this->get_terms();
+			$term_slugs = $this->get_terms_slugs();
 
-			if ( ! is_wp_error( $terms ) ) {
-
-				$term_slugs = [];
-				if ( ! empty( $terms ) ) {
-					foreach ( $terms as $term ) {
-						$term_slugs[] = $term->slug;
-					}
-				} elseif ( empty( $terms ) ) {
-					// Add story slug also if the taxonomy does not have any terms.
-					$term_slugs[] = 'story';
-				}
-
-				$terms_slugs = implode( '|', $term_slugs );
+			if ( $term_slugs ) {
+				$terms_slugs_regex = implode( '|', $term_slugs );
 
 				$new_rules = [];
 				foreach ( $rules as $match => $rule ) {
-					$new_match               = str_replace( '%p4_page_type%', "($terms_slugs)", $match );
+					$new_match               = str_replace( '%p4_page_type%', "($terms_slugs_regex)", $match );
 					$new_rule                = str_replace( '%p4_page_type%', 'p4_page_type=', $rule );
 					$new_rules[ $new_match ] = $new_rule;
 				}
@@ -245,11 +287,11 @@ if ( ! class_exists( 'P4_Custom_Taxonomy' ) ) {
 
 			// Allow p4-page-type to be set from edit post and quick edit pages.
 			// Make sure there's input.
-			if ( isset( $_POST['p4-page-type'] ) && 'post' === $post->post_type ) { // Input var okay.
-				$selected = get_term_by( 'slug', sanitize_text_field( wp_unslash( $_POST['p4-page-type'] ) ), 'p4-page-type' ); // Input var okay.
+			if ( isset( $_POST[self::TAXONOMY] ) && 'post' === $post->post_type ) { // Input var okay.
+				$selected = get_term_by( 'slug', sanitize_text_field( wp_unslash( $_POST[self::TAXONOMY] ) ), self::TAXONOMY ); // Input var okay.
 				if ( false !== $selected && ! is_wp_error( $selected ) ) {
 					// Save post type.
-					wp_set_post_terms( $post_id, sanitize_text_field( $selected->slug ), 'p4-page-type' );
+					wp_set_post_terms( $post_id, sanitize_text_field( $selected->slug ), self::TAXONOMY );
 				}
 			}
 
